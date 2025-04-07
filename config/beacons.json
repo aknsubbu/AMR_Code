@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Noneo",
+    "mac_address": "66:16:0E:42:73:EF",
+    "x": 0,
+    "y": 0,
+    "description": "Beacon 0,0",
+    "last_updated": "2025-04-06 12:48:11"
+  },
+  {
+    "name": "None",
+    "mac_address": "68:7D:23:A6:FB:99",
+    "x": 0,
+    "y": 1,
+    "description": "Beacon 0,1",
+    "last_updated": "2025-04-06 12:48:40"
+  }
+]

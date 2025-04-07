@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Autonomous Robot Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            --primary-color: #3498db;
+            --secondary-color: #2c3e50;
+            --success-color: #2ecc71;
+            --warning-color: #f39c12;
+            --danger-color: #e74c3c;
+            --light-color: #ecf0f1;
+            --dark-color: #2c3e50;
+            --grid-cell-size: 35px;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            color: var(--dark-color);
+            background-color: #f8f9fa;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        
+        .panel {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            padding: 20px;
+            margin-bottom: 25px;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+        
+        .panel:hover {
+            box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+        }
+        
+        .half-panel {
+            width: calc(50% - 12.5px);
+        }
+        
+        @media (max-width: 768px) {
+            .half-panel {
+                width: 100%;
+            }
+        }
+        
+        h1, h2, h3 {
+            color: var(--secondary-color);
+            font-weight: 600;
+        }
+        
+        h1 {
+            margin-bottom: 30px;
+            position: relative;
+            padding-bottom: 15px;
+        }
+        
+        h1:after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 4px;
+            background: var(--primary-color);
+            border-radius: 2px;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-weight: 600;
+            margin: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .connected {
+            background: var(--success-color);
+            color: white;
+        }
+        
+        .disconnected {
+            background: var(--danger-color);
+            color: white;
+        }
+        
+        .demo {
+            background: var(--warning-color);
+            color: white;
+        }
+        
+        .control-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+        
+        .control-btn {
+            padding: 25px;
+            font-size: 18px;
+            border-radius: 8px;
+            border: none;
+            background: #f8f9fa;
+            color: var(--dark-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.05);
+            transition: all 0.2s ease;
+        }
+        
+        .control-btn:hover {
+            background: #e9ecef;
+            transform: translateY(-2px);
+        }
+        
+        .control-btn:active {
+            background: #dee2e6;
+            transform: translateY(1px);
+        }
+        
+        .control-btn i {
+            font-size: 28px;
+        }
+        
+        .speed-control {
+            margin-bottom: 25px;
+            text-align: center;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .speed-control input[type="range"] {
+            width: 100%;
+            height: 10px;
+            border-radius: 5px;
+            background: #dee2e6;
+            outline: none;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        
+        .speed-control input[type="range"]:hover {
+            opacity: 1;
+        }
+        
+        .response {
+            min-height: 80px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 25px;
+            text-align: left;
+            background: #f8f9fa;
+            overflow-y: auto;
+            max-height: 180px;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+        }
+        
+        .beacon-grid {
+            display: grid;
+            grid-template-columns: repeat(10, var(--grid-cell-size));
+            grid-template-rows: repeat(10, var(--grid-cell-size));
+            gap: 2px;
+            margin: 25px auto;
+            background: #dee2e6;
+            padding: 2px;
+            border-radius: 5px;
+        }
+        
+        .grid-cell {
+            width: var(--grid-cell-size);
+            height: var(--grid-cell-size);
+            background: #f8f9fa;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 10px;
+            transition: all 0.2s ease;
+            position: relative;
+            user-select: none;
+        }
+        
+        .grid-cell:hover {
+            background: #e9ecef;
+            transform: scale(1.05);
+            z-index: 2;
+        }
+        
+        .grid-cell.beacon {
+            background: var(--success-color);
+            color: white;
+            font-weight: bold;
+        }
+        
+        .grid-cell.obstacle {
+            background: var(--danger-color);
+            color: white;
+        }
+        
+        .grid-cell.robot {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .grid-cell.path {
+            background: var(--warning-color);
+            color: white;
+        }
+        
+        .grid-cell.target {
+            background: var(--secondary-color);
+            color: white;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 25px;
+            border-bottom: 2px solid #dee2e6;
+            padding-bottom: 0;
+            flex-wrap: wrap;
+        }
+        
+        .tab {
+            padding: 12px 25px;
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+            margin-right: 5px;
+            transition: all 0.3s ease;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-bottom: none;
+            position: relative;
+            top: 2px;
+        }
+        
+        .tab:hover {
+            background: #e9ecef;
+        }
+        
+        .tab.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .sensor-readings {
+            display: flex;
+            justify-content: space-between;
+            margin: 25px 0;
+            flex-wrap: wrap;
+        }
+        
+        .sensor {
+            flex: 1;
+            min-width: 150px;
+            margin: 10px;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+        }
+        
+        .sensor:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .sensor-value {
+            font-size: 26px;
+            font-weight: bold;
+            margin: 10px 0;
+            color: var(--primary-color);
+        }
+        
+        .sensor-icon {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: var(--secondary-color);
+        }
+        
+        .settings-form {
+            text-align: left;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--secondary-color);
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus {
+            border-color: var(--primary-color);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
+        }
+        
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+        }
+        
+        button:active {
+            transform: translateY(1px);
+        }
+        
+        .navigation-controls {
+            margin: 25px 0;
+        }
+        
+        .btn-secondary {
+            background-color: var(--secondary-color);
+        }
+        
+        .btn-secondary:hover {
+            background-color: #1a252f;
+        }
+        
+        .btn-danger {
+            background-color: var(--danger-color);
+        }
+        
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+        
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: all 0.3s;
+        }
+        
+        .modal {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            width: 80%;
+            max-width: 600px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .close {
+            float: right;
+            cursor: pointer;
+            font-size: 30px;
+            color: #aaa;
+            transition: color 0.3s;
+        }
+        
+        .close:hover {
+            color: var(--danger-color);
+        }
+        
+        #logs {
+            max-height: 250px;
+            overflow-y: auto;
+            text-align: left;
+            background: #f8f9fa;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        .log-timestamp {
+            color: var(--secondary-color);
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        
+        /* Map canvas styles */
+        #gridMap {
+            border: 2px solid #dee2e6;
+            border-radius: 5px;
+            background: #f8f9fa;
+            max-width: 100%;
+            height: auto;
+            margin: 25px auto;
+            display: block;
+            cursor: pointer;
+        }
+        
+        .map-container {
+            position: relative;
+            margin: 25px auto;
+            max-width: 600px;
+        }
+        
+        .map-legend {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 15px 0;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 0 10px 10px 0;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            margin-right: 5px;
+        }
+        
+        .map-info {
+            background-color: rgba(52, 152, 219, 0.1);
+            border-left: 4px solid var(--primary-color);
+            padding: 10px 15px;
+            margin: 15px 0;
+            text-align: left;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .map-status {
+            min-height: 60px;
+            margin: 15px 0;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        
+        .alert-info {
+            background-color: rgba(52, 152, 219, 0.1);
+            color: var(--primary-color);
+            border: 1px solid rgba(52, 152, 219, 0.2);
+        }
+        
+        .alert-success {
+            background-color: rgba(46, 204, 113, 0.1);
+            color: var(--success-color);
+            border: 1px solid rgba(46, 204, 113, 0.2);
+        }
+        
+        .alert-warning {
+            background-color: rgba(243, 156, 18, 0.1);
+            color: var(--warning-color);
+            border: 1px solid rgba(243, 156, 18, 0.2);
+        }
+        
+        .alert-danger {
+            background-color: rgba(231, 76, 60, 0.1);
+            color: var(--danger-color);
+            border: 1px solid rgba(231, 76, 60, 0.2);
+        }
+        
+        .position-info {
+            background: var(--light-color);
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            text-align: left;
+        }
+        
+        .position-details {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        
+        .position-item {
+            flex: 1;
+            min-width: 120px;
+            margin: 5px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+        
+        .position-label {
+            font-weight: bold;
+            color: var(--secondary-color);
+        }
+        
+        .beacon-list {
+            text-align: left;
+            margin: 20px 0;
+        }
+        
+        .beacon-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            transition: all 0.2s;
+        }
+        
+        .beacon-item:hover {
+            background: #e9ecef;
+        }
+        
+        .beacon-info {
+            flex: 1;
+        }
+        
+        .beacon-name {
+            font-weight: bold;
+            color: var(--secondary-color);
+        }
+        
+        .beacon-details {
+            color: #6c757d;
+            font-size: 14px;
+        }
+        
+        .beacon-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .centered-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Loading indicator */
+        .spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--primary-color);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        
+        /* Tooltip styling */
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 120px;
+            background-color: var(--dark-color);
+            color: white;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+</head>
+<body>
+    <h1>Autonomous Navigation Robot</h1>
+    
+    <div class="container">
+        <div class="panel">
+            <div id="statusIndicator" class="status disconnected">Disconnected</div>
+            <span id="robotState" class="status">State: Unknown</span>
+        </div>
+        
+        <div class="tabs">
+            <div class="tab active" data-tab="manual">Manual Control</div>
+            <div class="tab" data-tab="auto">Autonomous Navigation</div>
+            <div class="tab" data-tab="sensors">Sensor Readings</div>
+            <div class="tab" data-tab="settings">Settings</div>
+        </div>
+        
+        <!-- Manual Control Tab -->
+        <div id="manual" class="tab-content active">
+            <div class="panel">
+                <h2><i class="fas fa-gamepad"></i> Manual Control</h2>
+                <div class="control-panel">
+                    <button class="control-btn" style="grid-column: 1; grid-row: 1;" onclick="sendCommand('L')">
+                        <i class="fas fa-arrow-up fa-rotate-270"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 2; grid-row: 1;" onclick="sendCommand('F')">
+                        <i class="fas fa-arrow-up"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 3; grid-row: 1;" onclick="sendCommand('R')">
+                        <i class="fas fa-arrow-up fa-rotate-90"></i>
+                    </button>
+                    
+                    <button class="control-btn" style="grid-column: 1; grid-row: 2;" onclick="sendCommand('L')">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 2; grid-row: 2;" onclick="sendCommand('S')">
+                        <i class="fas fa-stop-circle"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 3; grid-row: 2;" onclick="sendCommand('R')">
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                    
+                    <button class="control-btn" style="grid-column: 1; grid-row: 3;" onclick="sendCommand('L')">
+                        <i class="fas fa-arrow-down fa-rotate-90"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 2; grid-row: 3;" onclick="sendCommand('B')">
+                        <i class="fas fa-arrow-down"></i>
+                    </button>
+                    <button class="control-btn" style="grid-column: 3; grid-row: 3;" onclick="sendCommand('R')">
+                        <i class="fas fa-arrow-down fa-rotate-270"></i>
+                    </button>
+                </div>
+                
+                <div class="speed-control">
+                    <label for="speedSlider">Speed: <span id="speedValue">128</span></label>
+                    <input type="range" id="speedSlider" min="0" max="255" value="128" oninput="updateSpeed(this.value)">
+                </div>
+                
+                <p><i class="fas fa-keyboard"></i> Use arrow keys for movement, space to stop</p>
+                
+                <div class="response" id="responseArea">Response will appear here...</div>
+            </div>
+        </div>
+        
+        <!-- Autonomous Navigation Tab -->
+        <div id="auto" class="tab-content">
+            <div class="panel half-panel">
+                <h2><i class="fas fa-map-marked-alt"></i> Navigation Map</h2>
+                
+                <div class="map-container">
+                    <canvas id="gridMap" width="500" height="500"></canvas>
+                    
+                    <div class="map-legend">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #a6e9ff;"></div>
+                            <span>Navigable</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #66bb6a;"></div>
+                            <span>Beacon</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #ef5350;"></div>
+                            <span>Obstacle</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #ab47bc;"></div>
+                            <span>Robot</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background-color: #f57c00;"></div>
+                            <span>Target</span>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info map-info">
+                        <i class="fas fa-info-circle"></i> Click anywhere on the map to navigate to that position or select a beacon to navigate to.
+                    </div>
+                    
+                    <div class="map-status" id="mapStatus"></div>
+                </div>
+                
+                <div class="navigation-controls">
+                    <button id="stopNavigation" class="btn-danger" onclick="stopNavigation()">
+                        <i class="fas fa-stop-circle"></i> Stop Navigation
+                    </button>
+                </div>
+            </div>
+            
+            <div class="panel half-panel">
+                <h2><i class="fas fa-route"></i> Navigation Status</h2>
+                
+                <div class="position-info">
+                    <h3><i class="fas fa-location-arrow"></i> Current Position</h3>
+                    <div class="position-details">
+                        <div class="position-item">
+                            <div class="position-label">X, Y</div>
+                            <div id="positionCoords">--</div>
+                        </div>
+                        <div class="position-item">
+                            <div class="position-label">Orientation</div>
+                            <div id="positionOrientation">--</div>
+                        </div>
+                        <div class="position-item">
+                            <div class="position-label">Confidence</div>
+                            <div id="positionConfidence">--</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="navigationStatus" class="alert alert-info">
+                    Not currently navigating
+                </div>
+                
+                <div id="obstacleInfo" class="alert alert-info">
+                    No obstacles detected
+                </div>
+                
+                <h3><i class="fas fa-project-diagram"></i> Path Information</h3>
+                <div id="pathInfo">No active path</div>
+                
+                <h3><i class="fas fa-list-ol"></i> Waypoints</h3>
+                <div id="waypointInfo">No waypoints</div>
+                
+                <div id="beaconSelector" class="beacon-grid" style="display: none;"></div>
+            </div>
+        </div>
+        
+        <!-- Sensor Readings Tab -->
+        <div id="sensors" class="tab-content">
+            <div class="panel">
+                <h2><i class="fas fa-microchip"></i> Sensor Readings</h2>
+                
+                <div class="sensor-readings">
+                    <div class="sensor">
+                        <div class="sensor-icon"><i class="fas fa-ruler"></i></div>
+                        <h3>Front Distance</h3>
+                        <div class="sensor-value" id="frontDistance">--</div>
+                        <div>cm</div>
+                    </div>
+                    
+                    <div class="sensor">
+                        <div class="sensor-icon"><i class="fas fa-ruler-horizontal"></i></div>
+                        <h3>Front Sensor 1</h3>
+                        <div class="sensor-value" id="front1Distance">--</div>
+                        <div>cm</div>
+                    </div>
+                    
+                    <div class="sensor">
+                        <div class="sensor-icon"><i class="fas fa-ruler-horizontal"></i></div>
+                        <h3>Front Sensor 2</h3>
+                        <div class="sensor-value" id="front2Distance">--</div>
+                        <div>cm</div>
+                    </div>
+                    
+                    <div class="sensor">
+                        <div class="sensor-icon"><i class="fas fa-eye"></i></div>
+                        <h3>Back IR</h3>
+                        <div class="sensor-value" id="backIR">--</div>
+                    </div>
+                    
+                    <div class="sensor">
+                        <div class="sensor-icon"><i class="fas fa-eye"></i></div>
+                        <h3>Cliff IR</h3>
+                        <div class="sensor-value" id="cliffIR">--</div>
+                    </div>
+                </div>
+                
+                <button onclick="requestSensorUpdate()">
+                    <i class="fas fa-sync-alt"></i> Update Sensors
+                </button>
+                
+                <h3><i class="fas fa-clipboard-list"></i> System Logs</h3>
+                <div id="logs"></div>
+            </div>
+        </div>
+        
+        <!-- Settings Tab -->
+        <div id="settings" class="tab-content">
+            <div class="panel">
+                <h2><i class="fas fa-cogs"></i> Settings</h2>
+                
+                <div class="settings-form">
+                    <div class="form-group">
+                        <label for="robotMode">Operating Mode</label>
+                        <select id="robotMode" onchange="setOperatingMode(this.value)">
+                            <option value="MANUAL">Manual</option>
+                            <option value="AUTONOMOUS">Autonomous</option>
+                            <option value="CALIBRATING">Calibration</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="posMethod">Positioning Method</label>
+                        <select id="posMethod">
+                            <option value="weighted">Weighted Centroid</option>
+                            <option value="nearest">Nearest Beacon</option>
+                            <option value="trilateration">Trilateration</option>
+                        </select>
+                        <button onclick="updateSettings('posMethod')">
+                            <i class="fas fa-save"></i> Update
+                        </button>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="safeDistance">Safe Distance (cm)</label>
+                        <input type="number" id="safeDistance" min="5" max="50" value="15">
+                        <button onclick="updateSettings('safeDistance')">
+                            <i class="fas fa-save"></i> Update
+                        </button>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="gridScale">Grid Scale (cm/cell)</label>
+                        <input type="number" id="gridScale" min="5" max="50" value="10">
+                        <button onclick="updateSettings('gridScale')">
+                            <i class="fas fa-save"></i> Update
+                        </button>
+                    </div>
+                    
+                    <h3><i class="fas fa-broadcast-tower"></i> Beacons</h3>
+                    <button onclick="showBeaconManager()">
+                        <i class="fas fa-edit"></i> Manage Beacons
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Beacon Manager Modal -->
+    <div class="overlay" id="beaconModal">
+        <div class="modal">
+            <span class="close" onclick="closeModal('beaconModal')">&times;</span>
+            <h2><i class="fas fa-broadcast-tower"></i> Beacon Manager</h2>
+            
+            <div id="beaconList" class="beacon-list">Loading beacons...</div>
+            
+            <h3>Add New Beacon</h3>
+            <div class="form-group">
+                <label for="beaconName">Name</label>
+                <input type="text" id="beaconName" placeholder="Beacon Name">
+            </div>
+            <div class="form-group">
+                <label for="beaconMac">MAC Address</label>
+                <input type="text" id="beaconMac" placeholder="00:00:00:00:00:00">
+            </div>
+            <div class="form-group">
+                <label for="beaconX">X Position</label>
+                <input type="number" id="beaconX" min="0" value="0">
+            </div>
+            <div class="form-group">
+                <label for="beaconY">Y Position</label>
+                <input type="number" id="beaconY" min="0" value="0">
+            </div>
+            <div class="form-group">
+                <label for="beaconDesc">Description</label>
+                <input type="text" id="beaconDesc" placeholder="Description">
+            </div>
+            
+            <button onclick="addBeacon()">
+                <i class="fas fa-plus-circle"></i> Add Beacon
+            </button>
+        </div>
+    </div>
+    
+    <script>
+        // Global variables
+        let currentSpeed = 128;
+        let selectedBeacon = null;
+        let gridSize = 10;
+        let robotPosition = { x: 0, y: 0 };
+        let currentPath = [];
+        let currentWaypoints = [];
+        let beacons = [];
+        let targetPosition = null;
+        let mapData = null;
+        let cellSize = 20;
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set up tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    // Hide all tab contents
+                    document.querySelectorAll('.tab-content').forEach(content => {
+                        content.classList.remove('active');
+                    });
+                    
+                    // Deactivate all tabs
+                    document.querySelectorAll('.tab').forEach(t => {
+                        t.classList.remove('active');
+                    });
+                    
+                    // Activate clicked tab
+                    this.classList.add('active');
+                    
+                    // Show corresponding content
+                    const tabId = this.getAttribute('data-tab');
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+            
+            // Initialize the grid map
+            initGridMap();
+            
+            // Fetch initial data
+            getBeacons();
+            checkStatus();
+            getRobotState();
+            getSensorData();
+            loadMapData();
+            
+            // Set up periodic updates
+            setInterval(checkStatus, 5000);
+            setInterval(getRobotState, 2000);
+            setInterval(getSensorData, 3000);
+            setInterval(loadMapData, 10000);
+            
+            // Add keyboard controls
+            document.addEventListener('keydown', function(event) {
+                if (document.getElementById('manual').classList.contains('active')) {
+                    switch(event.key) {
+                        case 'ArrowUp':
+                            sendCommand('F');
+                            break;
+                        case 'ArrowDown':
+                            sendCommand('B');
+                            break;
+                        case 'ArrowLeft':
+                            sendCommand('L');
+                            break;
+                        case 'ArrowRight':
+                            sendCommand('R');
+                            break;
+                        case ' ':  // Space bar
+                            sendCommand('S');
+                            break;
+                    }
+                }
+            });
+        });
+        
+        function updateSpeed(speed) {
+            currentSpeed = speed;
+            document.getElementById('speedValue').textContent = speed;
+        }
+        
+        function sendCommand(direction) {
+            const command = direction + currentSpeed;
+            
+            fetch('/api/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ command: command }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('responseArea').textContent = 
+                    `Command: ${command}\nResponse: ${JSON.stringify(data)}`;
+            })
+            .catch((error) => {
+                document.getElementById('responseArea').textContent = 
+                    `Error: ${error}`;
+            });
+        }
+        
+        function checkStatus() {
+            fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                const statusElement = document.getElementById('statusIndicator');
+                if (data.status === 'connected') {
+                    statusElement.textContent = 'Connected';
+                    statusElement.className = 'status connected';
+                } else if (data.status === 'demo') {
+                    statusElement.textContent = 'Demo Mode';
+                    statusElement.className = 'status demo';
+                } else {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.className = 'status disconnected';
+                }
+            })
+            .catch(() => {
+                const statusElement = document.getElementById('statusIndicator');
+                statusElement.textContent = 'Disconnected';
+                statusElement.className = 'status disconnected';
+            });
+        }
+        
+        function getRobotState() {
+            fetch('/api/robot/state')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('robotState').textContent = `State: ${data.state || 'Unknown'}`;
+                if (data.state === 'AUTONOMOUS') {
+                    document.getElementById('robotMode').value = 'AUTONOMOUS';
+                } else {
+                    document.getElementById('robotMode').value = 'MANUAL';
+                }
+                
+                // Update position if available
+                if (data.position) {
+                    robotPosition = data.position;
+                    document.getElementById('positionCoords').textContent = `(${robotPosition.x}, ${robotPosition.y})`;
+                    document.getElementById('positionOrientation').textContent = 
+                        `${robotPosition.orientation ? robotPosition.orientation.toFixed(1) + '°' : 'Unknown'}`;
+                    document.getElementById('positionConfidence').textContent = 
+                        `${robotPosition.confidence ? (robotPosition.confidence*100).toFixed(0) + '%' : 'Unknown'}`;
+                    
+                    // Update grid display on the canvas
+                    renderMap();
+                }
+            })
+            .catch(error => {
+                console.error('Error getting robot state:', error);
+            });
+        }
+        
+        function getSensorData() {
+            fetch('/api/sensors')
+            .then(response => response.json())
+            .then(data => {
+                // Update ultrasonic readings
+                if (data.distances) {
+                    // Update combined front distance
+                    document.getElementById('frontDistance').textContent = 
+                        data.distances.front > 0 ? data.distances.front.toFixed(1) : '--';
+                    
+                    // Update individual front sensor readings
+                    document.getElementById('front1Distance').textContent = 
+                        data.distances.front1 > 0 ? data.distances.front1.toFixed(1) : '--';
+                    document.getElementById('front2Distance').textContent = 
+                        data.distances.front2 > 0 ? data.distances.front2.toFixed(1) : '--';
+                }
+                
+                // Update IR sensor readings
+                if (data.ir) {
+                    document.getElementById('backIR').textContent = 
+                        data.ir.back_obstacle ? 'OBSTACLE' : 'Clear';
+                    document.getElementById('backIR').style.color = 
+                        data.ir.back_obstacle ? 'red' : 'green';
+                    
+                    document.getElementById('cliffIR').textContent = 
+                        data.ir.cliff ? 'CLIFF' : 'Clear';
+                    document.getElementById('cliffIR').style.color = 
+                        data.ir.cliff ? 'red' : 'green';
+                }
+                
+                // Update obstacles info
+                if (data.obstacles) {
+                    const obstacleCount = Object.keys(data.obstacles).length;
+                    document.getElementById('obstacleInfo').textContent = 
+                        obstacleCount > 0 ? `${obstacleCount} obstacles detected` : 'No obstacles detected';
+                    
+                    // Update obstacles on the map
+                    if (mapData) {
+                        renderMap(); // Will include obstacles
+                    }
+                }
+                
+                // Add to logs if there are any messages
+                if (data.messages && data.messages.length > 0) {
+                    for (const message of data.messages) {
+                        addLog(message);
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error getting sensor data:', error);
+            });
+        }
+        
+        // Initialize the grid map canvas
+        function initGridMap() {
+            const gridMap = document.getElementById('gridMap');
+            const ctx = gridMap.getContext('2d');
+            
+            // Handle clicks on the map
+            gridMap.addEventListener('click', function(event) {
+                if (!mapData) return;
+                
+                // Get click coordinates relative to canvas
+                const rect = gridMap.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                
+                // Convert to grid coordinates
+                const gridX = Math.floor(x / cellSize) + mapData.dimensions.min_x;
+                const gridY = Math.floor(y / cellSize) + mapData.dimensions.min_y;
+                
+                // Check if the clicked cell is within grid bounds
+                if (gridX >= mapData.dimensions.min_x && 
+                    gridX <= mapData.dimensions.max_x &&
+                    gridY >= mapData.dimensions.min_y && 
+                    gridY <= mapData.dimensions.max_y) {
+                    
+                    // Set as target and start navigation
+                    navigateToGridPosition(gridX, gridY);
+                }
+            });
+        }
+        
+        // Load map data from the server
+        function loadMapData() {
+            fetch('/api/map')
+                .then(response => response.json())
+                .then(data => {
+                    mapData = data;
+                    renderMap();
+                })
+                .catch(error => {
+                    console.error('Error loading map data:', error);
+                    document.getElementById('mapStatus').innerHTML = 
+                        `<div class="alert alert-danger">Error loading map: ${error.message}</div>`;
+                });
+        }
+        
+        // Render the grid map on the canvas
+        function renderMap() {
+            if (!mapData) return;
+            
+            const gridMap = document.getElementById('gridMap');
+            const ctx = gridMap.getContext('2d');
+            
+            const grid = mapData.grid;
+            const dimensions = mapData.dimensions;
+            
+            // Calculate cell size to fit in canvas
+            const canvasWidth = gridMap.width;
+            const canvasHeight = gridMap.height;
+            const gridWidth = dimensions.width;
+            const gridHeight = dimensions.height;
+            
+            cellSize = Math.min(
+                Math.floor(canvasWidth / gridWidth),
+                Math.floor(canvasHeight / gridHeight)
+            );
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+            
+            // Colors for different cell types
+            const colors = {
+                navigable: '#a6e9ff',    // Light blue
+                nonNavigable: '#888888', // Gray
+                beacon: '#66bb6a',       // Green
+                obstacle: '#ef5350',     // Red
+                path: '#ffca28',         // Yellow
+                current: '#ab47bc',      // Purple
+                target: '#f57c00'        // Orange
+            };
+            
+            // Render grid cells
+            for (let y = 0; y < grid.length; y++) {
+                for (let x = 0; x < grid[y].length; x++) {
+                    const cellType = grid[y][x];
+                    const cellX = x * cellSize;
+                    const cellY = y * cellSize;
+                    
+                    // Set color based on cell type
+                    switch (cellType) {
+                        case 0: // Non-navigable
+                            ctx.fillStyle = colors.nonNavigable;
+                            break;
+                        case 1: // Navigable
+                            ctx.fillStyle = colors.navigable;
+                            break;
+                        case 2: // Beacon
+                            ctx.fillStyle = colors.beacon;
+                            break;
+                        case 3: // Obstacle
+                            ctx.fillStyle = colors.obstacle;
+                            break;
+                        default:
+                            ctx.fillStyle = '#ffffff'; // White for unknown
+                    }
+                    
+                    // Draw cell
+                    ctx.fillRect(cellX, cellY, cellSize, cellSize);
+                    ctx.strokeStyle = '#dddddd';
+                    ctx.strokeRect(cellX, cellY, cellSize, cellSize);
+                }
+            }
+            
+            // Draw path if available
+            if (currentPath && currentPath.length > 0) {
+                for (let i = 0; i < currentPath.length; i++) {
+                    const pathX = (currentPath[i][0] - dimensions.min_x) * cellSize + cellSize/2;
+                    const pathY = (currentPath[i][1] - dimensions.min_y) * cellSize + cellSize/2;
+                    
+                    // Don't draw the current position or target position as part of the path
+                    if ((currentPath[i][0] === robotPosition.x && currentPath[i][1] === robotPosition.y) ||
+                        (targetPosition && currentPath[i][0] === targetPosition.x && currentPath[i][1] === targetPosition.y)) {
+                        continue;
+                    }
+                    
+                    ctx.fillStyle = colors.path;
+                    ctx.beginPath();
+                    ctx.arc(pathX, pathY, cellSize/4, 0, 2 * Math.PI);
+                    ctx.fill();
+                    
+                    // Draw line connecting path points
+                    if (i > 0) {
+                        const prevX = (currentPath[i-1][0] - dimensions.min_x) * cellSize + cellSize/2;
+                        const prevY = (currentPath[i-1][1] - dimensions.min_y) * cellSize + cellSize/2;
+                        
+                        ctx.strokeStyle = colors.path;
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(prevX, prevY);
+                        ctx.lineTo(pathX, pathY);
+                        ctx.stroke();
+                    }
+                }
+            }
+            
+            // Draw target position if set
+            if (targetPosition) {
+                const targetX = (targetPosition.x - dimensions.min_x) * cellSize + cellSize/2;
+                const targetY = (targetPosition.y - dimensions.min_y) * cellSize + cellSize/2;
+                
+                ctx.fillStyle = colors.target;
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, cellSize/3, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Add a pulsing effect
+                ctx.strokeStyle = colors.target;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, cellSize/2, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+            
+            // Draw current position if available
+            if (robotPosition && robotPosition.x !== undefined && robotPosition.y !== undefined) {
+                const posX = (robotPosition.x - dimensions.min_x) * cellSize + cellSize/2;
+                const posY = (robotPosition.y - dimensions.min_y) * cellSize + cellSize/2;
+                
+                ctx.fillStyle = colors.current;
+                ctx.beginPath();
+                ctx.arc(posX, posY, cellSize/2, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Draw orientation arrow if available
+                if (robotPosition.orientation !== undefined) {
+                    const orientation = robotPosition.orientation * (Math.PI / 180);
+                    const arrowLength = cellSize * 0.8;
+                    
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(posX, posY);
+                    ctx.lineTo(
+                        posX + Math.sin(orientation) * arrowLength,
+                        posY - Math.cos(orientation) * arrowLength
+                    );
+                    ctx.stroke();
+                }
+            }
+            
+            // Add beacon labels
+            ctx.fillStyle = '#000000';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            
+            for (const [name, beacon] of Object.entries(mapData.beacons)) {
+                const beaconX = (beacon.x - dimensions.min_x) * cellSize + cellSize/2;
+                const beaconY = (beacon.y - dimensions.min_y) * cellSize + cellSize/2 + 4;
+                ctx.fillText(name, beaconX, beaconY);
+            }
+        }
+        
+        // Navigate to a grid position
+        function navigateToGridPosition(x, y) {
+            document.getElementById('mapStatus').innerHTML = 
+                `<div class="alert alert-info">Navigating to position (${x}, ${y})...</div>`;
+            
+            // Store target position for visualization
+            targetPosition = { x, y };
+            renderMap();
+            
+            fetch('/api/navigation/grid-click', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ x, y })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('mapStatus').innerHTML = 
+                        `<div class="alert alert-success">${data.message}</div>`;
+                    
+                    document.getElementById('navigationStatus').innerHTML = 
+                        `<div class="alert alert-success">${data.message}</div>`;
+                    
+                    // Update path information
+                    if (data.path_length) {
+                        document.getElementById('pathInfo').textContent = 
+                            `Active path with ${data.path_length} points`;
+                        
+                        // Get path details
+                        fetch('/api/paths')
+                            .then(response => response.json())
+                            .then(pathData => {
+                                if (pathData.current_path) {
+                                    currentPath = pathData.current_path;
+                                    renderMap();
+                                }
+                            });
+                    }
+                    
+                    // Update waypoint information
+                    if (data.waypoints) {
+                        document.getElementById('waypointInfo').textContent = 
+                            `Executing ${data.waypoints} waypoints`;
+                        
+                        // Get waypoint details
+                        fetch('/api/waypoints')
+                            .then(response => response.json())
+                            .then(waypointData => {
+                                if (waypointData.waypoints) {
+                                    currentWaypoints = waypointData.waypoints;
+                                }
+                            });
+                    }
+                    
+                    addLog(`Started navigation to ${data.message.split('to ')[1]}`);
+                } else {
+                    document.getElementById('mapStatus').innerHTML = 
+                        `<div class="alert alert-danger">${data.message}</div>`;
+                    
+                    document.getElementById('navigationStatus').innerHTML = 
+                        `<div class="alert alert-danger">${data.message}</div>`;
+                }
+            })
+            .catch(error => {
+                console.error('Error starting navigation:', error);
+                document.getElementById('mapStatus').innerHTML = 
+                    `<div class="alert alert-danger">Error starting navigation: ${error.message}</div>`;
+            });
+        }
+        
+        function stopNavigation() {
+            fetch('/api/navigation/stop', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({}),
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('navigationStatus').innerHTML = 
+                    `<div class="alert alert-info">${data.message}</div>`;
+                
+                document.getElementById('mapStatus').innerHTML = 
+                    `<div class="alert alert-info">${data.message}</div>`;
+                
+                // Clear target and path visualization
+                targetPosition = null;
+                currentPath = [];
+                renderMap();
+                
+                addLog('Navigation stopped');
+            })
+            .catch(error => {
+                document.getElementById('navigationStatus').innerHTML = 
+                    `<div class="alert alert-danger">Error: ${error}</div>`;
+            });
+        }
+        
+        function getBeacons() {
+            fetch('/api/beacons')
+            .then(response => response.json())
+            .then(data => {
+                beacons = data.beacons;
+                refreshBeaconList();
+            })
+            .catch(error => {
+                console.error('Error getting beacons:', error);
+            });
+        }
+        
+        function showBeaconManager() {
+            // Populate beacon list
+            refreshBeaconList();
+            
+            // Show modal
+            document.getElementById('beaconModal').style.display = 'flex';
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+        
+        function refreshBeaconList() {
+            const beaconList = document.getElementById('beaconList');
+            
+            if (!beacons || beacons.length === 0) {
+                beaconList.innerHTML = '<p>No beacons configured.</p>';
+                return;
+            }
+            
+            let html = '';
+            for (const beacon of beacons) {
+                html += `
+                <div class="beacon-item">
+                    <div class="beacon-info">
+                        <div class="beacon-name">${beacon.name || 'Unnamed Beacon'}</div>
+                        <div class="beacon-details">
+                            Position: (${beacon.x}, ${beacon.y}) - 
+                            MAC: ${beacon.mac_address.substring(0, 8)}...
+                            ${beacon.description ? '<br>Description: ' + beacon.description : ''}
+                        </div>
+                    </div>
+                    <div class="beacon-actions">
+                        <button class="btn-danger" onclick="removeBeacon('${beacon.name}')">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </div>`;
+            }
+            
+            beaconList.innerHTML = html;
+        }
+        
+        function addBeacon() {
+            const name = document.getElementById('beaconName').value;
+            const mac_address = document.getElementById('beaconMac').value;
+            const x = parseInt(document.getElementById('beaconX').value);
+            const y = parseInt(document.getElementById('beaconY').value);
+            const description = document.getElementById('beaconDesc').value;
+            
+            if (!name || !mac_address) {
+                alert('Name and MAC address are required');
+                return;
+            }
+            
+            fetch('/api/beacons', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name, mac_address, x, y, description }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Beacon added successfully');
+                    getBeacons();
+                    loadMapData(); // Refresh map
+                    
+                    // Clear form
+                    document.getElementById('beaconName').value = '';
+                    document.getElementById('beaconMac').value = '';
+                    document.getElementById('beaconDesc').value = '';
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                alert(`Error: ${error}`);
+            });
+        }
+        
+        function removeBeacon(name) {
+            if (confirm(`Are you sure you want to remove the beacon "${name}"?`)) {
+                fetch(`/api/beacons/${name}`, {
+                    method: 'DELETE',
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('Beacon removed successfully');
+                        getBeacons();
+                        loadMapData(); // Refresh map
+                    } else {
+                        alert(`Error: ${data.message}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`Error: ${error}`);
+                });
+            }
+        }
+        
+        function requestSensorUpdate() {
+            getSensorData();
+            addLog('Sensor update requested');
+        }
+        
+        function setOperatingMode(mode) {
+            fetch('/api/robot/mode', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ mode }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert(`Mode changed to ${mode}`);
+                    getRobotState();
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                alert(`Error: ${error}`);
+            });
+        }
+        
+        function updateSettings(setting) {
+            const value = document.getElementById(setting).value;
+            
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ setting, value }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert(`Setting updated: ${setting} = ${value}`);
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                alert(`Error: ${error}`);
+            });
+        }
+        
+        function addLog(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            const timestampSpan = document.createElement('span');
+            timestampSpan.className = 'log-timestamp';
+            timestampSpan.textContent = `[${timestamp}]`;
+            
+            logEntry.appendChild(timestampSpan);
+            logEntry.appendChild(document.createTextNode(` ${message}`));
+            
+            logs.appendChild(logEntry);
+            
+            // Scroll to bottom
+            logs.scrollTop = logs.scrollHeight;
+            
+            // Limit log entries
+            while (logs.children.length > 100) {
+                logs.removeChild(logs.firstChild);
+            }
+        }
+    </script>
+</body>
+</html>
