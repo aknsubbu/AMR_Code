@@ -171,7 +171,12 @@ class GridMap:
         Returns:
             GridCell at (x,y) or None if outside grid
         """
-        return self.grid.get((x, y))
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+            return self.grid.get((x, y))
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid grid coordinates: {x}, {y}")
+            return None
     
     def set_obstacle(self, x, y, is_obstacle=True, temporary=True):
         """
@@ -186,6 +191,12 @@ class GridMap:
         Returns:
             True if successful, False if coordinates are outside grid
         """
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid obstacle coordinates: {x}, {y}")
+            return False
+            
         cell = self.get_cell(x, y)
         if not cell:
             return False
@@ -217,6 +228,11 @@ class GridMap:
         Returns:
             True if navigable, False otherwise
         """
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+        except (ValueError, TypeError):
+            return False
+            
         cell = self.get_cell(x, y)
         if not cell:
             return False
@@ -263,6 +279,11 @@ class GridMap:
         Returns:
             List of (x,y) coordinates of navigable neighbors
         """
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+        except (ValueError, TypeError):
+            return []
+            
         neighbors = []
         
         # Define potential neighbors
@@ -308,7 +329,11 @@ class GridMap:
         Returns:
             Beacon name or None if no beacon at position
         """
-        return self.beacons.get((x, y))
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+            return self.beacons.get((x, y))
+        except (ValueError, TypeError):
+            return None
     
     def save_to_database(self):
         """Save the grid to the database."""
@@ -396,3 +421,65 @@ class GridMap:
                     grid_array[array_y, array_x] = 0
         
         return grid_array
+    
+    def find_nearest_navigable(self, x, y, max_distance=5):
+        """
+        Find the nearest navigable cell to the given coordinates.
+        
+        Args:
+            x: Target X coordinate
+            y: Target Y coordinate
+            max_distance: Maximum search distance
+            
+        Returns:
+            (x,y) of nearest navigable cell, or None if none found
+        """
+        try:
+            x, y = int(x), int(y)  # Ensure coordinates are integers
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid coordinates for nearest navigable search: {x}, {y}")
+            return None
+            
+        # Check if the target itself is navigable
+        if self.is_navigable(x, y):
+            return (x, y)
+        
+        # Search in expanding squares around the target
+        for distance in range(1, max_distance + 1):
+            # Check perimeter of square with side length 2*distance
+            for dx in range(-distance, distance + 1):
+                for dy in [-distance, distance]:  # Top and bottom edges
+                    nx, ny = x + dx, y + dy
+                    if self.is_navigable(nx, ny):
+                        return (nx, ny)
+                        
+            for dy in range(-distance + 1, distance):  # Left and right edges, excluding corners
+                for dx in [-distance, distance]:
+                    nx, ny = x + dx, y + dy
+                    if self.is_navigable(nx, ny):
+                        return (nx, ny)
+        
+        return None
+    
+    def expand_obstacles(self, expansion=1):
+        """
+        Expand obstacles to provide clearance.
+        
+        Args:
+            expansion: Number of cells to expand
+        """
+        if expansion <= 0:
+            return
+        
+        # Make a copy of obstacles to avoid modification during iteration
+        obstacles = list(self.obstacles)
+        
+        # For each obstacle, mark surrounding cells as temporary obstacles
+        for ox, oy in obstacles:
+            for dx in range(-expansion, expansion + 1):
+                for dy in range(-expansion, expansion + 1):
+                    if dx == 0 and dy == 0:
+                        continue  # Skip the obstacle itself
+                    self.set_obstacle(ox + dx, oy + dy, True, temporary=True)
+        
+        logger.debug(f"Expanded {len(obstacles)} obstacles by {expansion} cells")
