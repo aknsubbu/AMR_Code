@@ -26,7 +26,7 @@ class BeaconScanner:
             scan_interval: Time between scans in seconds
         """
         self.event_bus = event_bus
-        self.scan_interval = scan_interval
+        self.scan_interval = float(scan_interval)
         self.scanning = False
         self.scan_thread = None
         self.beacons = {}  # name -> {rssi, last_seen, count, mac_address}
@@ -78,66 +78,82 @@ class BeaconScanner:
         """Perform a single BLE scan."""
         logger.debug("Starting BLE scan...")
         
-        # Use discovery with the detection callback
-        devices = await BleakScanner.discover(timeout=3.0)
-        
-        timestamp = datetime.now()
-        discovered = []
-        
-        with self._lock:
-            for device in devices:
-                # Extract device info
-                mac_address = device.address
-                name = device.name
+        try:
+            # Use discovery with the detection callback
+            devices = await BleakScanner.discover(timeout=3.0)
+            
+            timestamp = datetime.now()
+            discovered = []
+            
+            with self._lock:
+                for device in devices:
+                    try:
+                        # Extract device info
+                        mac_address = device.address
+                        name = device.name
+                        
+                        # Skip devices without names
+                        if not name or name.lower() == "unknown":
+                            if hasattr(device, 'metadata') and device.metadata.get('uuids'):
+                                # Fall back to UUID if needed but log the situation
+                                logger.debug(f"Device {mac_address} has no name but has UUIDs: {device.metadata.get('uuids')}")
+                            continue
+                        
+                        # Get RSSI value, ensure it's a float
+                        rssi = -100.0  # Default value if RSSI not available
+                        
+                        if hasattr(device, 'rssi'):
+                            try:
+                                rssi = float(device.rssi)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid RSSI value for {name}: {device.rssi}")
+                                
+                        # Use the device name as the primary identifier
+                        beacon_id = name
+                        
+                        if beacon_id not in self.beacons:
+                            self.beacons[beacon_id] = {
+                                'rssi': rssi,
+                                'last_seen': timestamp,
+                                'count': 1,
+                                'mac_address': mac_address
+                            }
+                            logger.debug(f"New beacon detected: {beacon_id} ({mac_address})")
+                        else:
+                            # Verify MAC address matches
+                            if self.beacons[beacon_id]['mac_address'] != mac_address:
+                                logger.warning(f"MAC address changed for {beacon_id}: {self.beacons[beacon_id]['mac_address']} -> {mac_address}")
+                                self.beacons[beacon_id]['mac_address'] = mac_address
+                            
+                            # Update existing beacon
+                            self.beacons[beacon_id]['rssi'] = self._smooth_rssi(
+                                self.beacons[beacon_id]['rssi'], 
+                                rssi,
+                                self.beacons[beacon_id]['count']
+                            )
+                            self.beacons[beacon_id]['last_seen'] = timestamp
+                            self.beacons[beacon_id]['count'] += 1
+                        
+                        discovered.append(beacon_id)
+                    except Exception as e:
+                        logger.error(f"Error processing device {getattr(device, 'address', 'unknown')}: {e}")
+                        continue
                 
-                # Skip devices without names
-                if not name or name.lower() == "unknown":
-                    if hasattr(device, 'metadata') and device.metadata.get('uuids'):
-                        # Fall back to UUID if needed but log the situation
-                        logger.debug(f"Device {mac_address} has no name but has UUIDs: {device.metadata.get('uuids')}")
-                    continue
-                
-                rssi = device.rssi
-                
-                # Use the device name as the primary identifier
-                beacon_id = name
-                
-                if beacon_id not in self.beacons:
-                    self.beacons[beacon_id] = {
-                        'rssi': rssi,
-                        'last_seen': timestamp,
-                        'count': 1,
-                        'mac_address': mac_address
-                    }
-                    logger.debug(f"New beacon detected: {beacon_id} ({mac_address})")
-                else:
-                    # Verify MAC address matches
-                    if self.beacons[beacon_id]['mac_address'] != mac_address:
-                        logger.warning(f"MAC address changed for {beacon_id}: {self.beacons[beacon_id]['mac_address']} -> {mac_address}")
-                        self.beacons[beacon_id]['mac_address'] = mac_address
-                    
-                    # Update existing beacon
-                    self.beacons[beacon_id]['rssi'] = self._smooth_rssi(
-                        self.beacons[beacon_id]['rssi'], 
-                        rssi,
-                        self.beacons[beacon_id]['count']
-                    )
-                    self.beacons[beacon_id]['last_seen'] = timestamp
-                    self.beacons[beacon_id]['count'] += 1
-                
-                discovered.append(beacon_id)
-                
-            # Log when beacons disappear
-            current_beacons = set(self.beacons.keys())
-            seen_beacons = set(discovered)
-            for disappeared in current_beacons - seen_beacons:
-                # If not seen for more than 30 seconds, mark as inactive
-                last_seen = self.beacons[disappeared]['last_seen']
-                if (timestamp - last_seen).total_seconds() > 30:
-                    logger.debug(f"Beacon {disappeared} not seen recently")
-        
-        logger.debug(f"Scan complete. Found {len(discovered)} beacons")
-        return discovered
+                # Log when beacons disappear
+                current_beacons = set(self.beacons.keys())
+                seen_beacons = set(discovered)
+                for disappeared in current_beacons - seen_beacons:
+                    # If not seen for more than 30 seconds, mark as inactive
+                    last_seen = self.beacons[disappeared]['last_seen']
+                    if (timestamp - last_seen).total_seconds() > 30:
+                        logger.debug(f"Beacon {disappeared} not seen recently")
+            
+            logger.debug(f"Scan complete. Found {len(discovered)} beacons")
+            return discovered
+            
+        except Exception as e:
+            logger.error(f"Error during BLE scan: {e}")
+            return []
     
     def _smooth_rssi(self, old_rssi, new_rssi, count, alpha=0.2):
         """
@@ -152,9 +168,21 @@ class BeaconScanner:
         Returns:
             Smoothed RSSI value
         """
-        if count <= 1:
-            return new_rssi
-        return old_rssi * (1 - alpha) + new_rssi * alpha
+        try:
+            old_rssi = float(old_rssi)
+            new_rssi = float(new_rssi)
+            count = int(count)
+            alpha = float(alpha)
+            
+            if count <= 1:
+                return new_rssi
+            return old_rssi * (1 - alpha) + new_rssi * alpha
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error in RSSI smoothing: {e}, using new value directly")
+            try:
+                return float(new_rssi)
+            except (ValueError, TypeError):
+                return -100.0  # Default fallback
     
     def get_visible_beacons(self):
         """
@@ -191,9 +219,12 @@ class BeaconScanner:
     
     def _run_immediate_scan(self):
         """Run an immediate scan in a new thread."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self._scan_once())
-        loop.close()
-        # Publish the results
-        self.event_bus.publish('beacon_scan_complete', self.get_visible_beacons())
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._scan_once())
+            loop.close()
+            # Publish the results
+            self.event_bus.publish('beacon_scan_complete', self.get_visible_beacons())
+        except Exception as e:
+            logger.error(f"Error during immediate scan: {e}")
