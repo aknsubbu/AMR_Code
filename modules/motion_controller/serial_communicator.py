@@ -467,13 +467,58 @@ class SerialCommunicator:
         # Publish the raw response as an event
         self.event_bus.publish('arduino_response', response)
     
-    def send_command(self, command, callback=None):
+    # def send_command(self, command, callback=None):
+    #     """
+    #     Send a command to the Arduino.
+        
+    #     Args:
+    #         command: Command string to send
+    #         callback: Optional callback function to call with response
+            
+    #     Returns:
+    #         Response message
+    #     """
+    #     if self.demo_mode:
+    #         demo_response = self._generate_demo_response(command)
+    #         if callback:
+    #             callback(demo_response)
+    #         return demo_response
+        
+    #     if not self.connected:
+    #         if self._connect():  # Try to reconnect
+    #             logger.info("Reconnected to Arduino")
+    #         else:
+    #             message = "Not connected to Arduino"
+    #             if callback:
+    #                 callback(message)
+    #             return message
+        
+    #     # Log movement commands
+    #     if command.startswith(('F', 'B')):
+    #         direction = "forward" if command.startswith('F') else "backward"
+    #         speed = command[1:] if len(command) > 1 else "default"
+    #         logger.info(f"Queueing {direction} movement command with speed {speed}")
+        
+    #     # Queue the command for sending
+    #     self.send_queue.put((command, callback))
+        
+    #     # For synchronous operation, could add a wait here
+    #     return f"Command '{command}' queued for sending"
+    
+
+    """
+Method update for SerialCommunicator to support high_priority parameter.
+This is a targeted fix for the TypeError in beacon tracking system.
+"""
+
+    def send_command(self, command, callback=None, high_priority=False):
         """
         Send a command to the Arduino.
         
         Args:
             command: Command string to send
             callback: Optional callback function to call with response
+            high_priority: Whether this is a high priority command
             
         Returns:
             Response message
@@ -498,9 +543,21 @@ class SerialCommunicator:
             direction = "forward" if command.startswith('F') else "backward"
             speed = command[1:] if len(command) > 1 else "default"
             logger.info(f"Queueing {direction} movement command with speed {speed}")
+        elif command.startswith('S') and high_priority:
+            logger.info("Queueing high-priority STOP command")
         
-        # Queue the command for sending
+        # Queue the command for sending (priority handled during processing)
         self.send_queue.put((command, callback))
+        
+        # Handle stop commands immediately if high priority
+        if high_priority and command.startswith('S'):
+            try:
+                with self.serial_lock:
+                    if self.connected and self.ser and self.ser.is_open:
+                        # Immediate stop - don't wait for queue processing
+                        self._send_raw("S\n")
+            except Exception as e:
+                logger.error(f"Error sending immediate stop command: {e}")
         
         # For synchronous operation, could add a wait here
         return f"Command '{command}' queued for sending"
@@ -623,6 +680,11 @@ class SerialCommunicator:
         
         self.connected = False
     
+    """
+    This is the fixed handle_command method for the SerialCommunicator class 
+    to properly support high_priority parameter.
+    """
+
     def handle_command(self, data):
         """
         Handle command event from event bus.
@@ -636,5 +698,6 @@ class SerialCommunicator:
         
         command = data['command']
         callback = data.get('callback')
+        high_priority = data.get('high_priority', False)  # Extract high_priority parameter
         
-        self.send_command(command, callback)
+        self.send_command(command, callback, high_priority=high_priority)
