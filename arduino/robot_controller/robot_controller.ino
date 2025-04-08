@@ -38,8 +38,8 @@ String command;
 unsigned long lastSensorCheck = 0;
 unsigned long lastSerialSend = 0;
 unsigned long lastCommandProcess = 0;
-const int SENSOR_CHECK_INTERVAL = 200;  // Check sensors every 200ms when moving
-const int SERIAL_SEND_INTERVAL = 100;   // Limit serial transmission frequency
+const int SENSOR_CHECK_INTERVAL = 2000;  // Check sensors every 200ms when moving
+const int SERIAL_SEND_INTERVAL = 500;   // Limit serial transmission frequency
 const int COMMAND_PROCESS_INTERVAL = 50; // Avoid processing commands too frequently
 
 // Set to true to ignore cliff sensor readings (for testing)
