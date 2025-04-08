@@ -14,7 +14,6 @@
  * - Motor A: Forward PIN 5, Backward PIN 3
  * - Motor B: Forward PIN 6, Backward PIN 11
  */
-
 // Motor pin definitions
 const int MOTOR_A1 = 5;  // Motor A Forward
 const int MOTOR_A2 = 3;  // Motor A Backward

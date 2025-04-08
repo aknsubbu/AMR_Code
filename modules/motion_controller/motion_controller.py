@@ -1,5 +1,6 @@
+
 """
-Motion controller for translating high-level movement commands to low-level serial commands.
+Motion controller for translating high-level movement commands to low-level binary serial commands.
 """
 import logging
 import time
@@ -19,7 +20,7 @@ class MovementDirection(Enum):
 class MotionController:
     """
     Motion controller for robot movement.
-    Translates high-level commands to serial commands.
+    Translates high-level commands to binary serial commands.
     """
     
     def __init__(self, serial_communicator, event_bus, command_throttler=None):
@@ -48,17 +49,28 @@ class MotionController:
         
         logger.info("Motion controller initialized")
     
-    def send_command(self, command, high_priority=False):
+    def send_command(self, direction, speed=0, high_priority=False):
         """
         Send a movement command.
         
         Args:
-            command: Movement command string
+            direction: Movement direction character or string (F, B, L, R, S)
+            speed: Movement speed (0-255)
             high_priority: Whether this is a high priority command
             
         Returns:
             Response message
         """
+        # If direction is a combined command string (e.g. "F100"), parse it
+        if isinstance(direction, str) and len(direction) > 1 and direction[1:].isdigit():
+            action = direction[0].upper()
+            speed = int(direction[1:])
+        else:
+            action = direction[0].upper() if isinstance(direction, str) else direction.value
+
+        # Command for throttling check
+        command = f"{action}{speed}"
+        
         # Check if command can be sent (if throttler is available)
         if self.command_throttler and not high_priority:
             if self.command_throttler.should_deduplicate(command):
@@ -71,31 +83,28 @@ class MotionController:
                 self.command_throttler.record_command(command)
         
         # Update current state
-        self._update_state_from_command(command)
+        self._update_state_from_command(action, speed)
         
-        # Send command to serial
-        response = self.serial.send_command(command, high_priority=high_priority)
+        # Send command to serial with explicit action and speed parameters
+        response = self.serial.send_command(action, speed, high_priority=high_priority)
         
         # Publish state update event
         self._publish_state_update()
         
         return response
     
-    def _update_state_from_command(self, command):
+    def _update_state_from_command(self, direction, speed):
         """
         Update the internal state based on command.
         
         Args:
-            command: Command string
+            direction: Direction character (F, B, L, R, S)
+            speed: Speed value (0-255)
         """
-        if not command:
+        if not direction:
             return
             
         with self.state_lock:
-            # Extract direction and speed
-            direction = command[0].upper() if len(command) > 0 else 'S'
-            speed = int(command[1:]) if len(command) > 1 and command[1:].isdigit() else 0
-            
             # Update state
             try:
                 self.current_direction = MovementDirection(direction)
@@ -120,13 +129,23 @@ class MotionController:
         Handle motion command event.
         
         Args:
-            data: Command data
+            data: Command data dictionary
         """
-        command = data.get('command')
+        # Extract command components
+        direction = data.get('direction', '')
+        speed = data.get('speed', 0)
+        
+        # Handle combined command string format
+        if not direction and 'command' in data:
+            command = data.get('command', '')
+            if command and len(command) > 0:
+                direction = command[0]
+                speed = int(command[1:]) if len(command) > 1 and command[1:].isdigit() else 0
+        
         high_priority = data.get('high_priority', False)
         
-        if command:
-            self.send_command(command, high_priority=high_priority)
+        if direction:
+            self.send_command(direction, speed, high_priority=high_priority)
     
     def move(self, direction, speed=128, high_priority=False):
         """
@@ -151,11 +170,8 @@ class MotionController:
         # Clamp speed
         speed = max(0, min(255, speed))
         
-        # Create command
-        command = f"{direction.value}{speed}"
-        
-        # Send command
-        return self.send_command(command, high_priority=high_priority)
+        # Send command with direction and explicit speed
+        return self.send_command(direction.value, speed, high_priority=high_priority)
     
     def stop(self, high_priority=True):
         """

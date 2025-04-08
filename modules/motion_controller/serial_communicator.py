@@ -1,6 +1,6 @@
 """
 Enhanced Serial communicator for interfacing with the Arduino.
-Features improved reliability, auto-reconnection, and command retries.
+Features binary protocol, high baud rate, priority commands, and improved reliability.
 """
 import serial
 import time
@@ -11,20 +11,24 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Protocol constants matching Arduino
+START_MARKER = 0xFF
+ACK_MARKER = 0xFE
+
 class SerialCommunicator:
     """
-    Manages serial communication with the Arduino.
+    Manages binary serial communication with the Arduino.
     Handles command sending and response parsing with improved reliability.
     """
     
-    def __init__(self, port, event_bus, baudrate=9600, timeout=1.0, demo_mode=False):
+    def __init__(self, port, event_bus, baudrate=2000000, timeout=1.0, demo_mode=False):
         """
         Initialize the serial communicator.
         
         Args:
             port: Serial port name
             event_bus: EventBus for inter-module communication
-            baudrate: Serial baud rate
+            baudrate: Serial baud rate (defaults to 2000000 for high-speed communication)
             timeout: Serial timeout in seconds
             demo_mode: Whether to run in demo mode without real hardware
         """
@@ -47,9 +51,9 @@ class SerialCommunicator:
         self.max_retries = 3
         self.retry_delay = 0.5
         
-        # Command processing delays
-        self.pre_command_delay = 0.1  # Delay before sending a command
-        self.post_command_delay = 0.2  # Delay after sending a command
+        # Command processing delays - reduced for high-speed communication
+        self.pre_command_delay = 0.05  # Delay before sending a command
+        self.post_command_delay = 0.1  # Delay after sending a command
         
         self.send_queue = queue.Queue()
         self.response_queue = queue.Queue()
@@ -77,7 +81,7 @@ class SerialCommunicator:
         if self.demo_mode:
             logger.info("Running in DEMO mode - no serial connection will be established")
             self.connected = False
-            return
+            return False
         
         # Check reconnection cooldown
         current_time = time.time()
@@ -103,25 +107,26 @@ class SerialCommunicator:
                 except Exception as e:
                     logger.warning(f"Error closing existing serial connection: {e}")
             
-            # Open new connection
+            # Open new connection with high baud rate
             self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
             logger.info(f"Connected to Arduino on {self.port} at {self.baudrate} baud")
             
-            # Important: Allow longer time for Arduino to reset and stabilize
-            time.sleep(3)
+            # Important: Allow time for Arduino to reset and stabilize
+            time.sleep(2)
             
             # Clear any pending data
             if self.ser.in_waiting:
                 self.ser.reset_input_buffer()
             
-            # Test the connection with a ping
-            self.ser.write(b"O\n")  # Simple ping
+            # Test the connection with a ping (Stop command)
+            self._send_binary_command('S', 0, False)
             time.sleep(0.5)
             
-            # Read response if available
-            response = ""
+            # Check for ACK response
             if self.ser.in_waiting:
-                response = self.ser.readline().decode().strip()
+                response = self._read_binary_response()
+                if response:
+                    logger.debug(f"Connection test response: {response}")
             
             # Reset reconnection counter on success
             self.reconnect_attempts = 0
@@ -178,9 +183,9 @@ class SerialCommunicator:
                     # Test the connection periodically
                     try:
                         with self.serial_lock:
-                            # Send a simple ping command
+                            # Send a simple stop command to check connection
                             if self.ser.is_open:
-                                self.ser.write(b"O\n")
+                                self._send_binary_command('S', 0, False)
                                 time.sleep(0.1)
                     except Exception as e:
                         logger.warning(f"Connection check failed: {e}")
@@ -190,7 +195,7 @@ class SerialCommunicator:
             time.sleep(WATCHDOG_INTERVAL)
     
     def _reader_loop(self):
-        """Background thread for reading from serial port with robust error handling."""
+        """Background thread for reading binary responses from serial port."""
         if not self.connected or not self.ser:
             return
         
@@ -204,9 +209,9 @@ class SerialCommunicator:
                     continue
                 
                 with self.serial_lock:
-                    if self.ser.in_waiting > 0:
-                        # Read line from serial with timeout
-                        response = self._read_with_timeout(0.5)
+                    if self.ser.in_waiting >= 3:  # We expect 3 bytes per response
+                        # Read binary response
+                        response = self._read_binary_response()
                         
                         if response:
                             timestamp = datetime.now()
@@ -236,28 +241,40 @@ class SerialCommunicator:
                 
                 time.sleep(0.1)
     
-    def _read_with_timeout(self, timeout):
-        """Read from serial with timeout to prevent blocking."""
+    def _read_binary_response(self):
+        """Read binary response from serial with timeout."""
         if not self.ser or not self.ser.is_open:
             return None
         
-        start_time = time.time()
-        buffer = bytearray()
-        
-        while (time.time() - start_time) < timeout:
-            if self.ser.in_waiting > 0:
-                byte = self.ser.read(1)
-                if byte:
-                    buffer.extend(byte)
-                    if byte == b'\n':
-                        break
-            else:
-                time.sleep(0.01)
-        
-        return buffer.decode().strip() if buffer else None
+        try:
+            # Check for ACK marker
+            marker = self.ser.read(1)
+            if not marker or marker[0] != ACK_MARKER:
+                if marker and len(marker) > 0:
+                    logger.warning(f"Unexpected marker received: {marker[0]:#x}, expected: {ACK_MARKER:#x}")
+                return None
+            
+            # Read action and speed
+            action_byte = self.ser.read(1)
+            speed_byte = self.ser.read(1)
+            
+            if not action_byte or not speed_byte:
+                logger.warning("Incomplete response received")
+                return None
+            
+            action = chr(action_byte[0])
+            speed = speed_byte[0]
+            
+            return {
+                'action': action,
+                'speed': speed
+            }
+        except Exception as e:
+            logger.error(f"Error reading binary response: {e}")
+            return None
     
     def _writer_loop(self):
-        """Background thread for writing to serial port with robust error handling."""
+        """Background thread for writing binary commands to serial port."""
         if not self.connected or not self.ser:
             return
         
@@ -270,9 +287,14 @@ class SerialCommunicator:
                 
                 # Get command from queue with timeout
                 try:
-                    command, callback = self.send_queue.get(timeout=0.5)
+                    command_data, callback = self.send_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                
+                # Extract command components
+                command = command_data.get('command', 'S')
+                speed = command_data.get('speed', 0)
+                high_priority = command_data.get('high_priority', False)
                 
                 # Send command to Arduino with retries
                 success = False
@@ -285,26 +307,20 @@ class SerialCommunicator:
                         time.sleep(self.pre_command_delay)
                         
                         with self.serial_lock:
-                            # Send the command
-                            self._send_raw(command)
+                            # Send the binary command
+                            self._send_binary_command(command, speed, high_priority)
                         
                         # Delay after sending to allow Arduino to process
                         time.sleep(self.post_command_delay)
                         
-                        # Check for response, with longer timeout for move commands
-                        # Move commands (F/B) need more time than turn commands (L/R)
-                        if command.startswith('F') or command.startswith('B'):
-                            timeout = 1.0  # Longer timeout for movement
-                        else:
-                            timeout = 0.5
-                        
+                        # Wait for ACK response
                         try:
-                            response, timestamp = self.response_queue.get(timeout=timeout)
+                            response, timestamp = self.response_queue.get(timeout=0.5)
                             self.response_queue.task_done()
                             success = True
                         except queue.Empty:
                             # For some commands, no response is still a success
-                            if command.startswith('S'):  # Stop command
+                            if command == 'S':  # Stop command
                                 success = True
                             else:
                                 logger.warning(f"No response for command: {command} (retry {retries+1}/{self.max_retries})")
@@ -349,182 +365,107 @@ class SerialCommunicator:
         # Attempt to reconnect
         self._connect()
     
-    def _send_raw(self, command, retries=0):
+    def _send_binary_command(self, action, speed, high_priority):
         """
-        Send a raw command to the Arduino with optional retries.
+        Send a binary command to the Arduino.
         
         Args:
-            command: Command string to send
-            retries: Current retry count
+            action: Single character command (F, B, L, R, S)
+            speed: Speed value (0-255)
+            high_priority: Whether this is a high priority command
         
         Returns:
             True if sent successfully, False otherwise
         """
         if not self.connected or not self.ser or not self.ser.is_open:
-            logger.debug(f"[NOT CONNECTED] Would send: {command}")
+            logger.debug(f"[NOT CONNECTED] Would send: {action}, speed={speed}, priority={high_priority}")
             return False
         
         try:
-            # Ensure command ends with newline
-            if not command.endswith('\n'):
-                command += '\n'
+            # Ensure valid speed range (0-255)
+            speed = min(max(0, speed), 255)
             
-            # Specially handle movement commands with higher priority
-            if command.startswith(('F', 'B')):
-                # Clear any pending data
-                self.ser.reset_input_buffer()
-                # Force write with flush
-                self.ser.write(command.encode())
-                self.ser.flush()
-                # Log movement commands more prominently
-                logger.info(f"Movement command sent: {command.strip()}")
-            else:
-                # Send normal command
-                self.ser.write(command.encode())
-                logger.debug(f"Sent: {command.strip()}")
+            # Get action byte and set priority flag if needed
+            action_byte = ord(action[0].upper())
+            if high_priority:
+                action_byte |= 0x80  # Set the high bit to flag as priority
             
-            self.last_command = command.strip()
+            # Binary packet: START_MARKER, action_byte, speed
+            command_bytes = bytes([START_MARKER, action_byte, speed])
+            
+            # Send command
+            self.ser.write(command_bytes)
+            
+            # Log command details
+            priority_str = "HIGH priority" if high_priority else "normal priority"
+            logger.debug(f"Sent binary command: action={action}, speed={speed}, {priority_str}")
+            
+            self.last_command = f"{action},{speed},{high_priority}"
             self.last_command_time = datetime.now()
             return True
             
         except Exception as e:
-            logger.error(f"Error sending command: {e}")
-            
-            # Try to reconnect if sending fails
-            if retries < 2:
-                logger.warning(f"Attempting to reconnect and retry sending {command}")
-                self._attempt_reconnect()
-                if self.connected:
-                    return self._send_raw(command, retries + 1)
-            
+            logger.error(f"Error sending binary command: {e}")
             return False
     
     def _process_response(self, response):
         """
-        Process a response from the Arduino.
+        Process a binary response from the Arduino.
         
         Args:
-            response: Response string from Arduino
+            response: Response dictionary with action and speed
         """
+        if not response or not isinstance(response, dict):
+            return
+        
         # Store the response
         self.last_response = response
         
-        # Special debug for movement feedback
-        if response.startswith(("Moving", "Turning")):
-            logger.info(f"Movement feedback: {response}")
+        # Extract action and speed
+        action = response.get('action', '')
+        speed = response.get('speed', 0)
         
-        # Check for special response formats
-        if ":" in response:
-            # Parse key:value format responses
-            parts = response.split(":")
-            if len(parts) >= 2:
-                key = parts[0].strip()
-                value = parts[1].strip()
-                
-                if key == "V":
-                    # Battery voltage
-                    try:
-                        voltage = float(value)
-                        self.event_bus.publish('battery_voltage', voltage)
-                    except ValueError:
-                        pass
-                
-                elif key == "US":
-                    # Ultrasonic sensor readings
-                    try:
-                        readings = [float(v) for v in value.split(",")]
-                        self.event_bus.publish('ultrasonic_readings', readings)
-                    except ValueError:
-                        pass
-                
-                elif key == "IR":
-                    # IR sensor readings
-                    try:
-                        parts = value.split(",")
-                        if len(parts) >= 2:
-                            ir_back = int(parts[0])
-                            ir_cliff = int(parts[1])
-                            self.event_bus.publish('ir_readings', {
-                                'back': ir_back,
-                                'cliff': ir_cliff
-                            })
-                    except ValueError:
-                        pass
+        # Log movement feedback
+        if action in ['F', 'B', 'L', 'R']:
+            direction_map = {
+                'F': 'Forward',
+                'B': 'Backward',
+                'L': 'Left',
+                'R': 'Right'
+            }
+            direction = direction_map.get(action, action)
+            logger.info(f"Movement feedback: {direction} at speed {speed}")
         
-        # Check for error messages
-        elif "Error" in response or "error" in response:
-            logger.warning(f"Arduino reported error: {response}")
-            self.event_bus.publish('arduino_error', response)
-        
-        # Check for obstacle detection
-        elif "Objected" in response or "Cliff Detected" in response:
-            logger.warning(f"Obstacle detected: {response}")
-            self.event_bus.publish('obstacle_detected', {
-                'message': response,
-                'timestamp': datetime.now().isoformat()
-            })
-        
-        # Publish the raw response as an event
-        self.event_bus.publish('arduino_response', response)
+        # Publish the response as an event
+        self.event_bus.publish('arduino_response', {
+            'action': action,
+            'speed': speed,
+            'timestamp': datetime.now().isoformat()
+        })
     
-    # def send_command(self, command, callback=None):
-    #     """
-    #     Send a command to the Arduino.
-        
-    #     Args:
-    #         command: Command string to send
-    #         callback: Optional callback function to call with response
-            
-    #     Returns:
-    #         Response message
-    #     """
-    #     if self.demo_mode:
-    #         demo_response = self._generate_demo_response(command)
-    #         if callback:
-    #             callback(demo_response)
-    #         return demo_response
-        
-    #     if not self.connected:
-    #         if self._connect():  # Try to reconnect
-    #             logger.info("Reconnected to Arduino")
-    #         else:
-    #             message = "Not connected to Arduino"
-    #             if callback:
-    #                 callback(message)
-    #             return message
-        
-    #     # Log movement commands
-    #     if command.startswith(('F', 'B')):
-    #         direction = "forward" if command.startswith('F') else "backward"
-    #         speed = command[1:] if len(command) > 1 else "default"
-    #         logger.info(f"Queueing {direction} movement command with speed {speed}")
-        
-    #     # Queue the command for sending
-    #     self.send_queue.put((command, callback))
-        
-    #     # For synchronous operation, could add a wait here
-    #     return f"Command '{command}' queued for sending"
-    
-
-    """
-Method update for SerialCommunicator to support high_priority parameter.
-This is a targeted fix for the TypeError in beacon tracking system.
-"""
-
-    def send_command(self, command, callback=None, high_priority=False):
+    def send_command(self, command, speed=None, callback=None, high_priority=False):
         """
         Send a command to the Arduino.
         
         Args:
-            command: Command string to send
+            command: Command character (F, B, L, R, S)
+            speed: Speed value (0-255)
             callback: Optional callback function to call with response
             high_priority: Whether this is a high priority command
             
         Returns:
             Response message
         """
+        # Extract speed if included in command (e.g., "F100")
+        if speed is None and len(command) > 1 and command[1:].isdigit():
+            action = command[0]
+            speed = int(command[1:])
+        else:
+            action = command[0]
+            speed = speed or 0  # Default to 0 if not specified
+        
         if self.demo_mode:
-            demo_response = self._generate_demo_response(command)
+            demo_response = self._generate_demo_response(action, speed, high_priority)
             if callback:
                 callback(demo_response)
             return demo_response
@@ -539,62 +480,57 @@ This is a targeted fix for the TypeError in beacon tracking system.
                 return message
         
         # Log movement commands
-        if command.startswith(('F', 'B')):
-            direction = "forward" if command.startswith('F') else "backward"
-            speed = command[1:] if len(command) > 1 else "default"
-            logger.info(f"Queueing {direction} movement command with speed {speed}")
-        elif command.startswith('S') and high_priority:
+        if action in ['F', 'B']:
+            direction = "forward" if action == 'F' else "backward"
+            logger.info(f"Queueing {direction} movement command with speed {speed}, priority={'HIGH' if high_priority else 'normal'}")
+        elif action == 'S' and high_priority:
             logger.info("Queueing high-priority STOP command")
         
-        # Queue the command for sending (priority handled during processing)
-        self.send_queue.put((command, callback))
+        # Prepare command data dictionary
+        command_data = {
+            'command': action,
+            'speed': speed,
+            'high_priority': high_priority
+        }
+        
+        # Queue the command for sending
+        self.send_queue.put((command_data, callback))
         
         # Handle stop commands immediately if high priority
-        if high_priority and command.startswith('S'):
+        if high_priority and action == 'S':
             try:
                 with self.serial_lock:
                     if self.connected and self.ser and self.ser.is_open:
                         # Immediate stop - don't wait for queue processing
-                        self._send_raw("S\n")
+                        self._send_binary_command('S', 0, True)
             except Exception as e:
                 logger.error(f"Error sending immediate stop command: {e}")
         
-        # For synchronous operation, could add a wait here
-        return f"Command '{command}' queued for sending"
+        return f"Command '{action}' with speed {speed} queued for sending"
     
-    def _generate_demo_response(self, command):
+    def _generate_demo_response(self, action, speed, high_priority):
         """
         Generate a fake response for demo mode.
         
         Args:
-            command: Command that would be sent
+            action: Command action
+            speed: Command speed
+            high_priority: Whether this is a high priority command
             
         Returns:
-            Simulated response string
+            Simulated response dictionary
         """
-        if not command:
-            return "Error: Empty command"
+        if not action:
+            return {"error": "Empty command"}
         
-        # Extract direction and speed
-        direction = command[0].upper() if len(command) > 0 else '?'
-        speed = int(command[1:]) if len(command) > 1 and command[1:].isdigit() else 0
+        # Clean up action
+        action = action.upper()[0]
         
-        responses = {
-            'F': f"Moving Forward at speed: {speed}",
-            'B': f"Moving Backward at speed: {speed}",
-            'L': f"Turning Left at speed: {speed}",
-            'R': f"Turning Right at speed: {speed}",
-            'S': "Stopped",
-            'O': "Online"
+        response = {
+            'action': action,
+            'speed': speed,
+            'priority': high_priority
         }
-        
-        response = responses.get(direction, f"Invalid command: {command}")
-        
-        # Simulate random sensor readings occasionally
-        if direction in ['F', 'B', 'L', 'R'] and speed > 0:
-            # 10% chance of sending a sensor reading
-            if time.time() % 10 < 1:
-                response += f"\nV:{12.1 + (time.time() % 1) * 0.5}"  # Voltage between 12.1 and 12.6
         
         logger.debug(f"[DEMO] Response: {response}")
         return response
@@ -611,7 +547,7 @@ This is a targeted fix for the TypeError in beacon tracking system.
         
         if self.connected or self.demo_mode:
             # Send a special command to request sensor data
-            self.send_command("D")  # 'D' for data request
+            self.send_command('D', 0)  # 'D' for data request
             return True
         return False
     
@@ -631,18 +567,18 @@ This is a targeted fix for the TypeError in beacon tracking system.
         if not self.connected or not self.ser or not self.ser.is_open:
             return False
         
-        # Send a ping command and wait for response
+        # Send a stop command and wait for response
         response = []
         
         def collect_response(resp):
             response.append(resp)
         
-        self.send_command("O", collect_response)  # 'O' for online check
+        self.send_command('S', 0, collect_response)
         
         # Wait a bit for response
         time.sleep(0.5)
         
-        return len(response) > 0 and "Online" in response[0]
+        return len(response) > 0
     
     def is_connected(self):
         """
@@ -680,11 +616,6 @@ This is a targeted fix for the TypeError in beacon tracking system.
         
         self.connected = False
     
-    """
-    This is the fixed handle_command method for the SerialCommunicator class 
-    to properly support high_priority parameter.
-    """
-
     def handle_command(self, data):
         """
         Handle command event from event bus.
@@ -696,8 +627,9 @@ This is a targeted fix for the TypeError in beacon tracking system.
             logger.warning("Received command event with no command")
             return
         
-        command = data['command']
+        command = data.get('command', '')
+        speed = data.get('speed', 0)
         callback = data.get('callback')
-        high_priority = data.get('high_priority', False)  # Extract high_priority parameter
+        high_priority = data.get('high_priority', False)
         
-        self.send_command(command, callback, high_priority=high_priority)
+        self.send_command(command, speed, callback, high_priority=high_priority)

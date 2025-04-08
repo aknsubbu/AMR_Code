@@ -1,244 +1,455 @@
-#!/usr/bin/env python3
 """
-Enhanced Beacon Tracker with Calibration-Based and Manual Movement
-- Select beacon and calibrate
-- Option to perform movements based on calibration results
-- Press Enter to move forward at speed 128
-- Press Enter again to stop
+Integrated BeaconTrackerController with SerialCommunicator and MotionController.
+Provides a complete implementation for tracking and approaching BLE beacons.
 """
 import asyncio
 import logging
 import sys
-from beaconTrackerController import BeaconTrackerController
-from modules.motion_controller.motion_controller import MotionController
-from modules.motion_controller.serial_communicator import SerialCommunicator
+import time
+import threading
+import queue
+import signal
+from datetime import datetime
+from enum import Enum
 
-# Set up logging
+# Import your existing modules
+from modules.motion_controller.serial_communicator import SerialCommunicator
+from modules.motion_controller.motion_controller import MotionController, MovementDirection
+
+# Import the enhanced beacon tracker
+from beaconTrackerController import BeaconTrackerController, TrackingState, CalibrationPhase
+
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Changed to INFO for less verbose output
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('beacon_tracker.log')
     ]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("BeaconTracker")
 
-# Configuration
-SERIAL_PORT = '/dev/ttyUSB0'  # Arduino serial port
-TARGET_BEACON = None          # Set to None for selection prompt
-DEMO_MODE = False             # Set to False for real hardware
-
-# Tracking parameters
-SCAN_INTERVAL = 0.5           # Beacon scan interval
-RSSI_SAMPLES = 3              # RSSI samples to average
-RSSI_THRESHOLD = -80          # Signal threshold
-MOVEMENT_SPEED = 225          # Standard movement speed (as requested)
-
-async def perform_suggested_movement(motion_controller, best_direction, best_angle, duration=2.0):
+class CommandThrottler:
     """
-    Perform movement based on calibration results
+    Command throttler to prevent command flooding.
     """
-    # First turn to the best angle
-    turn_time = abs(best_angle) / 90.0  # Assuming 90 degrees takes 1 second
+    def __init__(self, min_interval=0.1, deduplication_window=0.05):
+        self.last_commands = {}
+        self.min_interval = min_interval
+        self.deduplication_window = deduplication_window
+        self.lock = threading.Lock()
     
-    print(f"🔄 Turning to {best_angle}° for {turn_time:.1f} seconds...")
+    def should_deduplicate(self, command):
+        """Check if command should be deduplicated."""
+        with self.lock:
+            if command not in self.last_commands:
+                return False
+            
+            last_time = self.last_commands.get(command, 0)
+            current_time = time.time()
+            
+            # Deduplicate if very recent identical command
+            return (current_time - last_time) < self.deduplication_window
     
-    if 0 <= best_angle < 180:
-        # Turn right
-        motion_controller.turn_right(MOVEMENT_SPEED)
-    else:
-        # Turn left
-        motion_controller.turn_left(MOVEMENT_SPEED)
+    def can_send_command(self, command):
+        """Check if command can be sent based on throttling rules."""
+        with self.lock:
+            if command not in self.last_commands:
+                return True
+            
+            last_time = self.last_commands.get(command, 0)
+            current_time = time.time()
+            
+            # Allow if enough time has passed
+            return (current_time - last_time) >= self.min_interval
     
-    await asyncio.sleep(turn_time)
-    motion_controller.stop()
-    await asyncio.sleep(0.5)  # Short pause after turning
-    
-    # Then move in the best direction
-    print(f"➡️ Moving {best_direction.lower()} for {duration} seconds...")
-    
-    if best_direction == "FORWARD":
-        motion_controller.forward(MOVEMENT_SPEED)
-    elif best_direction == "BACKWARD":
-        motion_controller.backward(MOVEMENT_SPEED)
-    elif best_direction == "LEFT":
-        motion_controller.turn_left(MOVEMENT_SPEED)
-    elif best_direction == "RIGHT":
-        motion_controller.turn_right(MOVEMENT_SPEED)
-    
-    await asyncio.sleep(duration)
-    motion_controller.stop()
-    
-    print("✅ Suggested movement complete")
-    return True
+    def record_command(self, command):
+        """Record that a command was sent."""
+        with self.lock:
+            self.last_commands[command] = time.time()
 
-async def main():
-    # Create event bus
-    class EventBus:
-        def __init__(self):
-            self.handlers = {}
+class EventBus:
+    """Simple implementation of event bus."""
+    def __init__(self):
+        self.handlers = {}
+        self.lock = threading.Lock()
         
-        def register(self, event, handler):
-            if event not in self.handlers:
-                self.handlers[event] = []
-            self.handlers[event].append(handler)
+    def register(self, event_type, handler):
+        with self.lock:
+            if event_type not in self.handlers:
+                self.handlers[event_type] = []
+            self.handlers[event_type].append(handler)
         
-        def publish(self, event, data=None):
-            if event in self.handlers:
-                for handler in self.handlers[event]:
-                    handler(data)
-    
-    event_bus = EventBus()
-    
-    # Initialize components
-    serial_comm = SerialCommunicator(SERIAL_PORT, event_bus, demo_mode=DEMO_MODE)
-    motion_controller = MotionController(serial_comm, event_bus)
-    
-    # Create the beacon tracker
-    tracker = BeaconTrackerController(
-        motion_controller=motion_controller,
-        target_beacon_name=TARGET_BEACON,
-        scan_interval=SCAN_INTERVAL,
-        rssi_samples=RSSI_SAMPLES,
-        rssi_threshold=RSSI_THRESHOLD,
-        movement_speed=MOVEMENT_SPEED
-    )
-    
-    # Start the tracker
-    await tracker.start()
-    
-    try:
-        # Test basic movement to ensure hardware is working
-        print("\n🔍 Testing basic movement...")
-        motion_controller.forward(MOVEMENT_SPEED)
-        await asyncio.sleep(0.5)
-        motion_controller.stop()
-        motion_controller.turn_right(MOVEMENT_SPEED)
-        await asyncio.sleep(0.5)
-        motion_controller.stop()
-        print("✅ Basic movement test complete")
+    def publish(self, event_type, data):
+        handlers = []
+        with self.lock:
+            if event_type in self.handlers:
+                handlers = self.handlers[event_type].copy()
         
-        # Scan for available beacons
-        print("\n🔍 Scanning for BLE beacons...")
-        beacons = await tracker.scan_for_beacons(duration=5.0)
+        for handler in handlers:
+            try:
+                handler(data)
+            except Exception as e:
+                logger.error(f"Error in event handler for {event_type}: {e}")
+
+class BeaconTrackerApp:
+    """
+    Main application for beacon tracking with integrated hardware control.
+    """
+    def __init__(self, serial_port='/dev/ttyUSB0', baud_rate=2000000, demo_mode=False):
+        """
+        Initialize the beacon tracker application.
+        
+        Args:
+            serial_port: Serial port for Arduino communication
+            baud_rate: Baud rate for serial communication
+            demo_mode: Whether to run in demo mode without real hardware
+        """
+        self.serial_port = serial_port
+        self.baud_rate = baud_rate
+        self.demo_mode = demo_mode
+        
+        # Components
+        self.event_bus = EventBus()
+        self.throttler = CommandThrottler(min_interval=0.1)
+        self.serial = None
+        self.motion = None
+        self.tracker = None
+        
+        # Control flags
+        self.running = False
+        self.shutdown_event = asyncio.Event()
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        logger.info("BeaconTrackerApp initialized")
+    
+    def _signal_handler(self, sig, frame):
+        """Handle termination signals for graceful shutdown."""
+        logger.info(f"Received signal {sig}, initiating shutdown...")
+        self.running = False
+        
+        # Set shutdown event if we're in an asyncio context
+        try:
+            if not self.shutdown_event.is_set():
+                loop = asyncio.get_event_loop()
+                loop.call_soon_threadsafe(self.shutdown_event.set)
+        except Exception:
+            pass
+    
+    async def setup(self):
+        """Set up all components."""
+        logger.info("Setting up components...")
+        
+        # Create and connect serial communicator
+        self.serial = SerialCommunicator(
+            port=self.serial_port,
+            event_bus=self.event_bus,
+            baudrate=self.baud_rate,
+            demo_mode=self.demo_mode
+        )
+        
+        # Allow time for serial connection to stabilize
+        await asyncio.sleep(2.0)
+        
+        # Create motion controller
+        self.motion = MotionController(
+            serial_communicator=self.serial,
+            event_bus=self.event_bus,
+            command_throttler=self.throttler
+        )
+        
+        # Create beacon tracker with configuration
+        tracker_config = {
+            # Scanning parameters
+            'scan_interval': 1.0,          # Interval between scans (seconds)
+            'scan_duration': 0.5,          # Duration of each scan (seconds)
+            'rssi_samples': 5,             # Number of samples for filtered RSSI
+            'rssi_min_threshold': -80,     # Minimum RSSI threshold for detection
+            
+            # Movement parameters
+            'rotation_speed': 100,         # Speed for rotation movements
+            'movement_speed': 120,         # Speed for forward/backward movements
+            'approach_speed': 100,         # Speed for approaching beacon
+            
+            # Calibration parameters
+            'rotation_min_steps': 8,       # Minimum rotation calibration steps
+            'rotation_max_steps': 12,      # Maximum rotation calibration steps
+            'distance_step_time': 0.8,     # Time to move for each distance step
+            'rssi_change_threshold': 3.0,  # Significant RSSI change threshold
+            
+            # Search parameters
+            'search_rotation_steps': 6,    # Finer rotation steps for search (6 x 60°)
+        }
+        
+        self.tracker = BeaconTrackerController(
+            motion_controller=self.motion,
+            event_bus=self.event_bus,
+            config=tracker_config,
+            logger=logger
+        )
+        
+        # Register event handlers for monitoring
+        self._register_event_handlers()
+        
+        # Start the tracker
+        await self.tracker.start()
+        
+        logger.info("Components setup complete")
+        return True
+    
+    def _register_event_handlers(self):
+        """Register event handlers for monitoring."""
+        # Serial and motion events
+        self.event_bus.register('arduino_response', self._on_arduino_response)
+        self.event_bus.register('motion_state_update', self._on_motion_update)
+        
+        # Beacon tracker events
+        self.event_bus.register('beacon_tracker_scan_complete', self._on_scan_complete)
+        self.event_bus.register('beacon_tracker_beacon_detected', self._on_beacon_detected)
+        self.event_bus.register('beacon_tracker_calibration_complete', self._on_calibration_complete)
+        self.event_bus.register('beacon_tracker_calibration_error', self._on_calibration_error)
+        self.event_bus.register('beacon_tracker_tracking_start', self._on_tracking_start)
+        self.event_bus.register('beacon_tracker_beacon_reached', self._on_beacon_reached)
+    
+    def _on_arduino_response(self, data):
+        """Handle Arduino response events."""
+        action = data.get('action', '')
+        speed = data.get('speed', 0)
+        
+        # Only log significant responses to avoid spamming the logs
+        if action and action != 'S' and speed > 0:
+            logger.debug(f"Arduino: {action} at speed {speed}")
+    
+    def _on_motion_update(self, data):
+        """Handle motion state update events."""
+        direction = data.get('direction', '')
+        speed = data.get('speed', 0)
+        is_moving = data.get('is_moving', False)
+        
+        # Only log significant updates to avoid spamming the logs
+        if is_moving and direction != 'STOP':
+            logger.debug(f"Motion: {direction} at speed {speed}")
+    
+    def _on_scan_complete(self, data):
+        """Handle scan complete events."""
+        count = data.get('count', 0)
+        logger.info(f"Scan complete: {count} beacons found")
+    
+    def _on_beacon_detected(self, data):
+        """Handle beacon detected events."""
+        # Only log occasionally to avoid spamming logs
+        if time.time() % 5 < 0.1:  # Log roughly every 5 seconds
+            name = data.get('name', 'Unknown')
+            rssi = data.get('rssi', 0)
+            logger.debug(f"Beacon: {name} (RSSI: {rssi})")
+    
+    def _on_calibration_complete(self, data):
+        """Handle calibration complete events."""
+        best_direction = data.get('best_direction', 'Unknown')
+        best_angle = data.get('best_angle', 0)
+        logger.info(f"Calibration complete: Best direction={best_direction}, angle={best_angle:.1f}°")
+    
+    def _on_calibration_error(self, data):
+        """Handle calibration error events."""
+        error = data.get('error', 'Unknown error')
+        logger.error(f"Calibration error: {error}")
+    
+    def _on_tracking_start(self, data):
+        """Handle tracking start events."""
+        target = data.get('target', 'Unknown')
+        logger.info(f"Tracking started for: {target}")
+    
+    def _on_beacon_reached(self, data):
+        """Handle beacon reached events."""
+        rssi = data.get('rssi', 0)
+        logger.info(f"Beacon reached with RSSI: {rssi}")
+    
+    async def teardown(self):
+        """Clean up all components."""
+        logger.info("Tearing down components...")
+        
+        # Stop the tracker
+        if self.tracker:
+            await self.tracker.stop_tracking()
+            await self.tracker.stop()
+        
+        # Close serial connection
+        if self.serial:
+            self.serial.close()
+        
+        logger.info("Teardown complete")
+    
+    async def run_scan_mode(self):
+        """Run in beacon scanning mode."""
+        logger.info("Running in scan mode...")
+        
+        # Initial scan to find beacons
+        beacons = await self.tracker.scan_for_beacons(duration=5.0)
         
         if not beacons:
-            print("❌ No beacons found. Exiting.")
+            logger.warning("No beacons found during scan")
             return
         
-        # Print found beacons with RSSI
-        print(f"\n📡 Found {len(beacons)} beacons:")
-        sorted_beacons = sorted(beacons.items(), key=lambda x: x[1]['rssi'], reverse=True)
-        for i, (name, data) in enumerate(sorted_beacons, 1):
-            rssi = data['rssi']
-            print(f"  {i}. {name}: RSSI {rssi} dBm {'(STRONG)' if rssi > -60 else ''}")
+        # Display detected beacons
+        logger.info(f"Found {len(beacons)} beacons:")
+        for name, data in beacons.items():
+            logger.info(f"  - {name}: RSSI {data['rssi']} dBm")
+    
+    async def run_tracking_mode(self, target_beacon=None, duration=60):
+        """
+        Run in beacon tracking mode.
         
-        # Simple single-step beacon selection
-        print("\n👉 Enter the number of the beacon to calibrate with (or press Enter to quit):")
-        selection = input("> ")
+        Args:
+            target_beacon: Target beacon name or pattern (if None, user will be prompted)
+            duration: Maximum tracking duration in seconds
+        """
+        # Initial scan to find beacons
+        beacons = await self.tracker.scan_for_beacons(duration=5.0)
         
-        if not selection.strip():
-            print("Exiting...")
+        if not beacons:
+            logger.warning("No beacons found during initial scan")
             return
+        
+        # Display detected beacons
+        logger.info(f"Found {len(beacons)} beacons:")
+        for i, (name, data) in enumerate(beacons.items(), 1):
+            logger.info(f"  {i}. {name}: RSSI {data['rssi']} dBm")
+        
+        # Select target beacon
+        selected_beacon = target_beacon
+        
+        if not selected_beacon:
+            # If no beacon specified, use the strongest one
+            strongest_beacon = max(beacons.items(), key=lambda x: x[1]['rssi'])
+            selected_beacon = strongest_beacon[0]
+            logger.info(f"Automatically selected strongest beacon: {selected_beacon}")
+        elif selected_beacon not in beacons:
+            # Try to find matching beacon by pattern
+            matching_beacons = [name for name in beacons.keys() 
+                               if selected_beacon.lower() in name.lower()]
+            
+            if matching_beacons:
+                selected_beacon = matching_beacons[0]
+                logger.info(f"Selected beacon by pattern match: {selected_beacon}")
+            else:
+                logger.warning(f"Specified beacon '{selected_beacon}' not found")
+                # Fall back to strongest beacon
+                strongest_beacon = max(beacons.items(), key=lambda x: x[1]['rssi'])
+                selected_beacon = strongest_beacon[0]
+                logger.info(f"Falling back to strongest beacon: {selected_beacon}")
+        
+        # Set target and calibrate
+        logger.info(f"Setting target beacon to: {selected_beacon}")
+        self.tracker.set_target_beacon(selected_beacon)
+        
+        logger.info("Starting calibration...")
+        calibration = await self.tracker.calibrate(force=True)
+        
+        if not calibration:
+            logger.error("Calibration failed, aborting tracking")
+            return
+        
+        # Start approaching the beacon
+        logger.info("Starting approach to beacon...")
+        await self.tracker.approach_beacon()
+        
+        # Track for specified duration
+        start_time = time.time()
+        interval = 1.0  # Status update interval
+        
+        logger.info(f"Tracking for up to {duration} seconds...")
+        while self.running and time.time() - start_time < duration:
+            # Check for shutdown signal
+            if self.shutdown_event.is_set():
+                break
+            
+            # Get current state
+            state = self.tracker.get_state()
+            
+            # Log current status periodically
+            if 'avg_rssi' in state and state['avg_rssi'] is not None:
+                logger.info(f"RSSI: {state['avg_rssi']:.1f} dBm, State: {state['state']}")
+            
+            # Check for completion
+            if state.get('avg_rssi', -100) > -45:
+                logger.info("Very close to beacon, tracking complete")
+                break
+            
+            # Check for signal loss
+            if state.get('tracking_errors', 0) > 5:
+                logger.warning("Too many tracking errors, attempting recalibration")
+                await self.tracker.calibrate(force=True)
+            
+            await asyncio.sleep(interval)
+        
+        # Stop tracking
+        await self.tracker.stop_tracking()
+        logger.info("Tracking mode completed")
+    
+    async def run(self, mode='scan', target_beacon=None, duration=60):
+        """
+        Run the beacon tracker application.
+        
+        Args:
+            mode: Operating mode ('scan' or 'track')
+            target_beacon: Target beacon name or pattern for tracking mode
+            duration: Maximum tracking duration in seconds
+        """
+        self.running = True
         
         try:
-            index = int(selection) - 1
-            if 0 <= index < len(sorted_beacons):
-                beacon_name = sorted_beacons[index][0]
-                tracker.set_target_beacon(beacon_name)
-                print(f"\n✅ Selected beacon: {beacon_name}")
-                
-                # Calibrate with the selected beacon
-                print("\n⚙️ Calibrating with selected beacon...")
-                
-                def calibration_progress(message):
-                    print(f"  > {message}")
-                
-                calibration_result = await tracker.calibrate(callback=calibration_progress)
-                
-                if calibration_result:
-                    best_direction = calibration_result.get('best_direction')
-                    print(f"\n✅ Calibration complete. Best direction: {best_direction}")
-                    
-                    best_angle = 0
-                    if 'rotation_map' in calibration_result:
-                        best_angle = max(calibration_result['rotation_map'].items(), key=lambda x: x[1])[0]
-                        print(f"  Best angle: {best_angle}°")
-                        print(f"  Peak signal: {calibration_result['signal_peak']} dBm")
-                    
-                    # Offer to execute the suggested movement
-                    print(f"\n⚠️ Calibration suggests: {best_direction} at {best_angle}° angle")
-                    print("Would you like to perform this movement? (y/n)")
-                    execute_suggestion = input("> ")
-                    
-                    if execute_suggestion.lower() == 'y':
-                        await perform_suggested_movement(motion_controller, best_direction, best_angle)
-                    
-                    # Simple manual control loop - just press Enter to move or stop
-                    print("\n🔄 Simple Manual Control:")
-                    print("  - Press ENTER to move forward at speed 128")
-                    print("  - Press ENTER again to stop")
-                    print("  - Type 's' to perform the suggested movement again")
-                    print("  - Type 'q' and press ENTER to quit")
-                    
-                    is_moving = False
-                    
-                    while True:
-                        # Display current state
-                        state = tracker.get_state()
-                        status = "MOVING" if is_moving else "STOPPED"
-                        rssi = state['rssi'] if state['rssi'] is not None else "N/A"
-                        
-                        # Prompt for input
-                        user_input = input(f"\n📡 Status: {status}, RSSI: {rssi} dBm | Press ENTER to toggle movement, 's' for suggested movement, or 'q' to quit > ")
-                        
-                        if user_input.lower() == 'q':
-                            print("🛑 Quitting...")
-                            break
-                        elif user_input.lower() == 's':
-                            # Stop any current movement first
-                            if is_moving:
-                                motion_controller.stop()
-                                is_moving = False
-                            
-                            # Perform suggested movement
-                            await perform_suggested_movement(motion_controller, best_direction, best_angle)
-                        elif user_input.lower()=='l2':
-                            motion_controller.turn_left(128)
-
-                        elif user_input.lower()=='r2':
-                            motion_controller.turn_right(128)
-                        else:
-                            # Toggle movement state
-                            if is_moving:
-                                # Stop the robot
-                                motion_controller.stop()
-                                print("🛑 Stopped")
-                                is_moving = False
-                            else:
-                                # Move forward at speed 128
-                                motion_controller.forward(150)  # Always use exactly 128 as requested
-                                print("➡️ Moving forward at speed 225")
-                                is_moving = True
-                else:
-                    print("❌ Calibration failed. Please check if the beacon is in range.")
+            # Set up components
+            success = await self.setup()
+            if not success:
+                logger.error("Setup failed")
+                return
+            
+            # Run the selected mode
+            if mode == 'scan':
+                await self.run_scan_mode()
+            elif mode == 'track':
+                await self.run_tracking_mode(target_beacon, duration)
             else:
-                print("❌ Invalid selection. Exiting.")
-        except ValueError:
-            print("❌ Invalid input. Exiting.")
-        
-    except KeyboardInterrupt:
-        print("\n🛑 Stopping...")
-    finally:
-        # Stop the tracker and clean up
-        motion_controller.stop()  # Ensure the robot stops
-        await tracker.stop()
-        if serial_comm:
-            serial_comm.close()
-        print("\n✅ Cleanup complete")
+                logger.error(f"Unknown mode: {mode}")
+            
+        except Exception as e:
+            logger.error(f"Error running beacon tracker: {e}", exc_info=True)
+        finally:
+            # Ensure proper cleanup
+            self.running = False
+            await self.teardown()
+
+async def main():
+    """Main entry point for the application."""
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description="Beacon Tracker Application")
+    parser.add_argument("--port", default="/dev/ttyUSB0", help="Serial port for Arduino")
+    parser.add_argument("--baud", type=int, default=2000000, help="Baud rate for serial communication")
+    parser.add_argument("--mode", choices=["scan", "track"], default="scan", help="Operation mode")
+    parser.add_argument("--target", help="Target beacon name or pattern for tracking")
+    parser.add_argument("--duration", type=int, default=60, help="Maximum tracking duration in seconds")
+    parser.add_argument("--demo", action="store_true", help="Run in demo mode without real hardware")
+    
+    args = parser.parse_args()
+    
+    # Create and run the application
+    app = BeaconTrackerApp(
+        serial_port=args.port,
+        baud_rate=args.baud,
+        demo_mode=args.demo
+    )
+    
+    await app.run(
+        mode=args.mode,
+        target_beacon=args.target,
+        duration=args.duration
+    )
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Program terminated by user")
+    # Run the application
+    asyncio.run(main())
